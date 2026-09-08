@@ -138,6 +138,25 @@ struct GraphNodesShape<'a> {
     nodes: &'a [NodeRenderData],
 }
 
+/// Solid disc: paints every canvas point inside `radius`, so nodes read as
+/// dots instead of a jagged 16-gon outline at small sizes.
+fn draw_filled_circle(painter: &mut Painter, cx: f64, cy: f64, radius: f64, color: Color) {
+    let step = (radius / 6.0).max(0.05);
+    let mut dy = -radius;
+    while dy <= radius {
+        let mut dx = -radius;
+        while dx <= radius {
+            if dx * dx + dy * dy <= radius * radius
+                && let Some((px, py)) = painter.get_point(cx + dx, cy + dy)
+            {
+                painter.paint(px, py, color);
+            }
+            dx += step;
+        }
+        dy += step;
+    }
+}
+
 fn draw_outlined_shape(
     painter: &mut Painter,
     cx: f64,
@@ -316,7 +335,11 @@ impl Shape for GraphNodesShape<'_> {
                 );
             }
 
-            draw_outlined_shape(painter, node.x, node.y, node.radius, node.shape, node.color);
+            if node.shape == NodeShape::Circle {
+                draw_filled_circle(painter, node.x, node.y, node.radius, node.color);
+            } else {
+                draw_outlined_shape(painter, node.x, node.y, node.radius, node.shape, node.color);
+            }
 
             let indicator_radius = 1.2;
             let orbit_radius = node.radius + 2.5;
@@ -349,6 +372,8 @@ pub struct LabelData {
     pub node_idx: NodeIndex,
     pub x: f64,
     pub y: f64,
+    /// Node centre, so the label can be flipped below the node on collision.
+    pub node_y: f64,
 }
 
 pub struct FeatureFlags {
@@ -376,6 +401,8 @@ pub struct RenderCache {
 
     pub visible_nodes: HashSet<NodeIndex>,
     pub selected_neighbors: HashSet<NodeIndex>,
+    /// Nodes outside the selected node's neighborhood (drawn muted).
+    pub dimmed: HashSet<NodeIndex>,
     pub label_texts: HashMap<NodeIndex, String>,
     pub cached_label_max_length: usize,
 }
@@ -402,6 +429,7 @@ impl RenderCache {
             minimap_dirty: true,
             visible_nodes: HashSet::new(),
             selected_neighbors: HashSet::new(),
+            dimmed: HashSet::new(),
             label_texts: HashMap::new(),
             cached_label_max_length: usize::MAX,
         }
@@ -485,7 +513,7 @@ impl RenderCache {
                 NodeColorMode::Folder => &self.folder_colors,
                 _ => &self.tag_colors,
             };
-            if items.is_empty() {
+            if items.len() <= 1 {
                 None
             } else {
                 let mut sorted: Vec<_> = items.iter().collect();
@@ -513,6 +541,7 @@ impl RenderCache {
         settings: &Settings,
         edge_color: Color,
         tier: LodTier,
+        selected_node: Option<NodeIndex>,
     ) {
         self.edges.clear();
 
@@ -525,7 +554,11 @@ impl RenderCache {
         for edge in graph.edge_references() {
             let src = &graph[edge.source()];
             let tgt = &graph[edge.target()];
-            let color = if uniform_edges {
+            let touches_selection =
+                selected_node.is_some_and(|sel| edge.source() == sel || edge.target() == sel);
+            let color = if selected_node.is_some() && !touches_selection {
+                Color::DarkGray
+            } else if uniform_edges {
                 edge_color
             } else {
                 match settings.visual.edge_color_mode {
@@ -591,13 +624,32 @@ impl RenderCache {
             _ => LodTier::Minimal,
         };
 
+        self.dimmed.clear();
+        if let Some(sel) = selected_node {
+            let mut keep: HashSet<NodeIndex> = selected_nodes.clone();
+            keep.insert(sel);
+            for edge in graph.edges(sel) {
+                keep.insert(edge.source());
+                keep.insert(edge.target());
+            }
+            self.dimmed.extend(
+                self.visible_nodes
+                    .iter()
+                    .copied()
+                    .filter(|i| !keep.contains(i)),
+            );
+        }
+
         for &idx in &self.visible_nodes {
             let node = &graph[idx];
-            let primary_color = self
-                .node_own_color
-                .get(&idx)
-                .copied()
-                .unwrap_or(Color::Gray);
+            let primary_color = if self.dimmed.contains(&idx) {
+                Color::DarkGray
+            } else {
+                self.node_own_color
+                    .get(&idx)
+                    .copied()
+                    .unwrap_or(Color::Gray)
+            };
             let radius = node_world_radius(settings, self.max_link_count, node.data.link_count);
 
             let is_selected = selected_node == Some(idx) || selected_nodes.contains(&idx);
@@ -696,6 +748,7 @@ impl RenderCache {
                         y: node.location.y as f64
                             + radius
                             + settings.visual.label_offset.max(min_offset_y),
+                        node_y: node.location.y as f64,
                     });
                 }
                 return;
@@ -740,8 +793,11 @@ impl RenderCache {
                 node_idx: idx,
                 x: node.location.x as f64,
                 y: node.location.y as f64 + radius + settings.visual.label_offset.max(min_offset_y),
+                node_y: node.location.y as f64,
             });
         }
+        // Stable order so collision resolution does not flicker between frames.
+        self.labels.sort_by_key(|l| l.node_idx);
     }
 }
 
@@ -792,7 +848,13 @@ pub fn draw_graph_view(
         x_bounds,
         y_bounds,
     );
-    cache.fill_edges(graph, settings, colors.edge_color, tier);
+    cache.fill_edges(
+        graph,
+        settings,
+        colors.edge_color,
+        tier,
+        state.selection.primary,
+    );
     let cell_world_height =
         (y_bounds[1] - y_bounds[0]).abs() / (canvas_area.height as f64).max(1.0);
     cache.fill_labels(
@@ -807,6 +869,8 @@ pub fn draw_graph_view(
     let nodes_ref = &cache.nodes;
     let labels_ref = &cache.labels;
     let label_texts_ref = &cache.label_texts;
+    let label_colors_ref = &cache.node_own_color;
+    let dimmed_ref = &cache.dimmed;
 
     let block = ratatui::widgets::Block::default().style(
         ratatui::style::Style::default().bg(colors.background_color.unwrap_or(Color::Reset)),
@@ -816,6 +880,46 @@ pub fn draw_graph_view(
         (canvas_area.width.saturating_sub(1) as f64) / (x_bounds[1] - x_bounds[0]);
     let rows_per_world_y =
         -(canvas_area.height.saturating_sub(1) as f64) / (y_bounds[1] - y_bounds[0]);
+
+    // Resolve label collisions in cell space: above the node first, below it as a
+    // fallback, dropped when both would overprint an already placed label.
+    let rows_per_world_abs = rows_per_world_y.abs();
+    let mut occupied: Vec<(i64, i64, i64)> = Vec::new();
+    let mut label_draws: Vec<(f64, f64, ratatui::text::Span<'static>)> = Vec::new();
+    for label in labels_ref {
+        let Some(text) = label_texts_ref.get(&label.node_idx) else {
+            continue;
+        };
+        let width = text.chars().count() as i64;
+        let half_width = width as f64 / 2.0 / cols_per_world_x.max(1e-9);
+        let x = label.x - half_width;
+        let col0 = ((x - x_bounds[0]) * cols_per_world_x).round() as i64;
+        let below_y = 2.0 * label.node_y - label.y;
+        let slot = [label.y, below_y].into_iter().find_map(|y| {
+            let row = ((y_bounds[1] - y) * rows_per_world_abs).round() as i64;
+            let free = occupied
+                .iter()
+                .all(|&(r, c0, c1)| r != row || col0 > c1 + 1 || col0 + width < c0 - 1);
+            free.then_some((row, y))
+        });
+        let Some((row, y)) = slot else {
+            continue;
+        };
+        occupied.push((row, col0, col0 + width));
+        let fg = if dimmed_ref.contains(&label.node_idx) {
+            Color::DarkGray
+        } else {
+            label_colors_ref
+                .get(&label.node_idx)
+                .copied()
+                .unwrap_or(colors.label_color)
+        };
+        label_draws.push((
+            x,
+            y,
+            ratatui::text::Span::styled(text.clone(), ratatui::style::Style::default().fg(fg)),
+        ));
+    }
 
     let canvas = Canvas::default()
         .background_color(colors.background_color.unwrap_or(Color::Reset))
@@ -830,14 +934,8 @@ pub fn draw_graph_view(
             ctx.layer();
             ctx.draw(&GraphNodesShape { nodes: nodes_ref });
             ctx.layer();
-            for label in labels_ref {
-                if let Some(text) = label_texts_ref.get(&label.node_idx) {
-                    let span = ratatui::text::Span::styled(
-                        text.clone(),
-                        ratatui::style::Style::default().fg(colors.label_color),
-                    );
-                    ctx.print(label.x, label.y, span);
-                }
+            for (x, y, span) in &label_draws {
+                ctx.print(*x, *y, span.clone());
             }
         });
 
