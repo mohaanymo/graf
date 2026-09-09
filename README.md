@@ -186,6 +186,7 @@ label_max_length = 20
 node_size = 2.0
 node_size_mode = "link_count"
 node_scale = 5
+node_fill = "dynamic"
 selection_focus = "grow"
 edge_thickness = 1
 show_legend = true

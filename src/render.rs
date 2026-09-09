@@ -9,8 +9,8 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 
 use crate::graph::{ContextMenu, GraphState};
 use crate::settings::{
-    EdgeColorMode, LabelMode, LegendPosition, NodeColorMode, NodeScale, NodeShape, SelectionFocus,
-    Settings,
+    EdgeColorMode, LabelMode, LegendPosition, NodeColorMode, NodeFill, NodeScale, NodeShape,
+    SelectionFocus, Settings,
 };
 use crate::theme::ThemeColors;
 use crate::viewport::{Viewport, node_world_radius};
@@ -719,8 +719,13 @@ impl RenderCache {
             } else {
                 base_radius.max(floor)
             };
-            // Filled discs only at full detail; outlines stay cheap on big vaults.
-            let filled = tier == LodTier::Full && (grown || floor_rows > 0.0);
+            // Filled per `node_fill`: never, always (but not 1-dot minimal
+            // LOD), or dynamically at full detail with size to show for it.
+            let filled = match settings.visual.node_fill {
+                NodeFill::None => false,
+                NodeFill::Filled => tier != LodTier::Minimal,
+                NodeFill::Dynamic => tier == LodTier::Full && (grown || floor_rows > 0.0),
+            };
 
             let is_selected = selected_node == Some(idx) || selected_nodes.contains(&idx);
             let is_hovered = hovered_node == Some(idx) && !is_selected;
@@ -762,8 +767,8 @@ impl RenderCache {
                         is_selected,
                         is_hovered: false,
                         selection_ring_color,
+                        filled,
                         shape: settings.visual.node_shape,
-                        filled: false,
                         dimmed: self.dimmed.contains(&idx),
                     });
                 }
@@ -1514,7 +1519,11 @@ pub fn draw_looking_glass(
     };
 
     let node_render = NodeRenderData {
-        filled: !matches!(settings.visual.node_scale, NodeScale::Fixed(1)),
+        filled: match settings.visual.node_fill {
+            NodeFill::None => false,
+            NodeFill::Filled => true,
+            NodeFill::Dynamic => !matches!(settings.visual.node_scale, NodeScale::Fixed(1)),
+        },
         dimmed: false,
         x: 0.0,
         y: 0.0,

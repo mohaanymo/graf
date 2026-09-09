@@ -181,6 +181,18 @@ impl<'de> Deserialize<'de> for NodeScale {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+pub enum NodeFill {
+    /// Filled per LOD and node scale (current behavior).
+    #[default]
+    Dynamic,
+    /// Always filled (except minimal-LOD 1-dot rendering).
+    Filled,
+    /// Never filled; outlined nodes.
+    None,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
 pub enum SelectionFocus {
     /// Selection changes nothing but the ring.
     None,
@@ -343,6 +355,8 @@ pub struct VisualConfig {
     #[serde(default)]
     pub node_scale: NodeScale,
     #[serde(default)]
+    pub node_fill: NodeFill,
+    #[serde(default)]
     pub selection_focus: SelectionFocus,
     pub edge_thickness: u16,
     pub show_legend: bool,
@@ -380,6 +394,7 @@ impl Default for VisualConfig {
             node_size: 2.0,
             node_size_mode: NodeSizeMode::default(),
             node_scale: NodeScale::default(),
+            node_fill: NodeFill::default(),
             selection_focus: SelectionFocus::default(),
             edge_thickness: 1,
             show_legend: true,
