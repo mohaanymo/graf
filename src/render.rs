@@ -199,21 +199,6 @@ fn paint_shape(
     }
 }
 
-/// Solid disc: paints every canvas point inside `radius`, so nodes read as
-/// dots instead of a jagged 16-gon outline at small sizes.
-fn draw_filled_circle(
-    painter: &mut Painter,
-    cx: f64,
-    cy: f64,
-    radius: f64,
-    step: f64,
-    color: Color,
-) {
-    paint_shape(painter, cx, cy, radius, NodeShape::Circle, step, |_, _| {
-        color
-    });
-}
-
 fn draw_outlined_shape(
     painter: &mut Painter,
     cx: f64,
@@ -392,14 +377,15 @@ impl Shape for GraphNodesShape<'_> {
                 );
             }
 
-            if node.filled && node.shape == NodeShape::Circle {
-                draw_filled_circle(
+            if node.filled {
+                paint_shape(
                     painter,
                     node.x,
                     node.y,
                     node.radius,
+                    node.shape,
                     self.fill_step,
-                    node.color,
+                    |_, _| node.color,
                 );
             } else {
                 draw_outlined_shape(painter, node.x, node.y, node.radius, node.shape, node.color);
