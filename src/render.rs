@@ -147,15 +147,16 @@ struct GraphNodesShape<'a> {
 }
 
 /// Minimum node radius in text rows for a vault of `node_count` notes.
-/// `Automatic` behaves like the maximum size up to about 100 notes and fades
-/// to the classic small look by about 400, so big vaults stay compact.
+/// `Automatic` eases from the maximum size at ~100 notes down to the classic
+/// small look by ~400 notes along a smoothstep curve, so the shrink reads as
+/// a gradual zoom instead of a linear ramp with abrupt ends.
 pub(crate) fn node_floor_rows(scale: NodeScale, node_count: usize) -> f64 {
     const LARGE_ROWS: f64 = 0.9;
     match scale {
         NodeScale::Fixed(k) => LARGE_ROWS * (k.min(10).saturating_sub(1)) as f64 / 9.0,
         NodeScale::Automatic => {
             let t = ((400.0 - node_count as f64) / 300.0).clamp(0.0, 1.0);
-            LARGE_ROWS * t
+            LARGE_ROWS * t * t * (3.0 - 2.0 * t)
         }
     }
 }
