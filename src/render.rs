@@ -137,8 +137,9 @@ pub struct NodeRenderData {
     pub filled: bool,
     /// Dimmed to gray by selection focus dimming.
     pub dimmed: bool,
+    /// Detached outline ring in the node's own color (grow focus feedback).
+    pub grow_ring: bool,
 }
-
 struct GraphNodesShape<'a> {
     nodes: &'a [NodeRenderData],
     /// World-units step between fill samples; a fraction of one canvas cell so
@@ -401,6 +402,18 @@ impl Shape for GraphNodesShape<'_> {
                 let cy = node.y + orbit_radius * angle.sin();
                 let marker_color = if node.dimmed { Color::DarkGray } else { color };
                 draw_tag_marker(painter, cx, cy, indicator_radius, i, marker_color);
+            }
+
+            if node.grow_ring {
+                // Detached ring in the node's own color; the gap is the cut.
+                draw_outlined_shape(
+                    painter,
+                    node.x,
+                    node.y,
+                    node.radius + 1.0,
+                    node.shape,
+                    node.color,
+                );
             }
 
             if node.is_selected {
@@ -713,9 +726,9 @@ impl RenderCache {
             let base_radius =
                 node_world_radius(settings, self.max_link_count, node.data.link_count);
             let grown = grow && lit.contains(&idx);
-            // Grown nodes are 1.5x whatever they would otherwise be drawn at.
+            // Grown nodes are slightly enlarged; the detached ring makes them pop.
             let radius = if grown {
-                base_radius.max(floor) * 1.5
+                base_radius.max(floor) * 1.2
             } else {
                 base_radius.max(floor)
             };
@@ -754,6 +767,7 @@ impl RenderCache {
                         shape: settings.visual.node_shape,
                         filled,
                         dimmed: self.dimmed.contains(&idx),
+                        grow_ring: grown,
                     });
                 }
                 LodTier::Medium => {
@@ -770,6 +784,7 @@ impl RenderCache {
                         filled,
                         shape: settings.visual.node_shape,
                         dimmed: self.dimmed.contains(&idx),
+                        grow_ring: grown,
                     });
                 }
                 LodTier::Minimal => {
@@ -786,6 +801,7 @@ impl RenderCache {
                         shape: NodeShape::Circle,
                         filled: false,
                         dimmed: self.dimmed.contains(&idx),
+                        grow_ring: grown,
                     });
                 }
             }
@@ -1530,6 +1546,7 @@ pub fn draw_looking_glass(
         color: node_color,
         radius,
         extra_tag_colors,
+        grow_ring: false,
         is_selected: false,
         is_hovered: false,
         selection_ring_color: colors.selected_indicator_color,
