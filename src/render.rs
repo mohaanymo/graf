@@ -141,6 +141,9 @@ pub struct NodeRenderData {
 
 struct GraphNodesShape<'a> {
     nodes: &'a [NodeRenderData],
+    /// World-units step between fill samples; a fraction of one canvas cell so
+    /// filled shapes paint solid instead of speckled.
+    fill_step: f64,
 }
 
 /// Minimum node radius in text rows for a vault of `node_count` notes.
@@ -157,24 +160,58 @@ pub(crate) fn node_floor_rows(scale: NodeScale, node_count: usize) -> f64 {
         }
     }
 }
+/// Fill-sample step in world units: a quarter of the smaller canvas cell
+/// dimension, below the braille dot pitch so discs paint solid.
+pub(crate) fn fill_step_for(cell_w: f64, cell_h: f64) -> f64 {
+    cell_w.min(cell_h) / 4.0
+}
 
-/// Solid disc: paints every canvas point inside `radius`, so nodes read as
-/// dots instead of a jagged 16-gon outline at small sizes.
-fn draw_filled_circle(painter: &mut Painter, cx: f64, cy: f64, radius: f64, color: Color) {
-    let step = (radius / 6.0).max(0.05);
+/// Paints every canvas point inside `radius` for `shape`, sampling on a
+/// `step`-spaced grid; `color_for` picks the color per sample.
+fn paint_shape(
+    painter: &mut Painter,
+    cx: f64,
+    cy: f64,
+    radius: f64,
+    shape: NodeShape,
+    step: f64,
+    color_for: impl Fn(f64, f64) -> Color,
+) {
+    let step = step.max(1e-6);
+    let inside = |dx: f64, dy: f64| match shape {
+        NodeShape::Circle => dx * dx + dy * dy <= radius * radius,
+        NodeShape::Square => dx.abs() <= radius && dy.abs() <= radius,
+        NodeShape::Diamond => dx.abs() + dy.abs() <= radius,
+    };
     let mut dy = -radius;
     while dy <= radius {
         let mut dx = -radius;
         while dx <= radius {
-            if dx * dx + dy * dy <= radius * radius
-                && let Some((px, py)) = painter.get_point(cx + dx, cy + dy)
-            {
-                painter.paint(px, py, color);
+            if inside(dx, dy) {
+                let color = color_for(dx, dy);
+                if let Some((px, py)) = painter.get_point(cx + dx, cy + dy) {
+                    painter.paint(px, py, color);
+                }
             }
             dx += step;
         }
         dy += step;
     }
+}
+
+/// Solid disc: paints every canvas point inside `radius`, so nodes read as
+/// dots instead of a jagged 16-gon outline at small sizes.
+fn draw_filled_circle(
+    painter: &mut Painter,
+    cx: f64,
+    cy: f64,
+    radius: f64,
+    step: f64,
+    color: Color,
+) {
+    paint_shape(painter, cx, cy, radius, NodeShape::Circle, step, |_, _| {
+        color
+    });
 }
 
 fn draw_outlined_shape(
@@ -356,7 +393,14 @@ impl Shape for GraphNodesShape<'_> {
             }
 
             if node.filled && node.shape == NodeShape::Circle {
-                draw_filled_circle(painter, node.x, node.y, node.radius, node.color);
+                draw_filled_circle(
+                    painter,
+                    node.x,
+                    node.y,
+                    node.radius,
+                    self.fill_step,
+                    node.color,
+                );
             } else {
                 draw_outlined_shape(painter, node.x, node.y, node.radius, node.shape, node.color);
             }
@@ -886,6 +930,8 @@ pub fn draw_graph_view(
     };
     let cell_world_height =
         (y_bounds[1] - y_bounds[0]).abs() / (canvas_area.height as f64).max(1.0);
+    let cell_world_width = (x_bounds[1] - x_bounds[0]) / (canvas_area.width as f64).max(1.0);
+    let fill_step = fill_step_for(cell_world_width, cell_world_height);
     let lit: HashSet<NodeIndex> = {
         let mut lit = selected_set.clone();
         if let Some(sel) = state.selection.primary {
@@ -984,8 +1030,10 @@ pub fn draw_graph_view(
         .paint(move |ctx| {
             ctx.draw(&GraphEdgesShape { edges: edges_ref });
             ctx.layer();
-            ctx.draw(&GraphNodesShape { nodes: nodes_ref });
-            ctx.layer();
+            ctx.draw(&GraphNodesShape {
+                nodes: nodes_ref,
+                fill_step,
+            });
             for (x, y, span) in &label_draws {
                 ctx.print(*x, *y, span.clone());
             }
@@ -1498,17 +1546,19 @@ pub fn draw_looking_glass(
     let aspect = glass_canvas_area.width as f64 / glass_canvas_area.height as f64;
     let half_h = radius + 4.0;
     let half_w = half_h * crate::viewport::CELL_ASPECT * aspect;
+    let glass_cell_w = (2.0 * half_w) / (glass_canvas_area.width as f64).max(1.0);
+    let glass_cell_h = (2.0 * half_h) / (glass_canvas_area.height as f64).max(1.0);
+    let glass_fill_step = fill_step_for(glass_cell_w, glass_cell_h);
 
     let canvas = Canvas::default()
         .background_color(bg)
         .marker(ratatui::symbols::Marker::from(
             settings.visual.canvas_marker,
         ))
-        .x_bounds([-half_w, half_w])
-        .y_bounds([-half_h, half_h])
         .paint(|ctx| {
             ctx.draw(&GraphNodesShape {
                 nodes: std::slice::from_ref(&node_render),
+                fill_step: glass_fill_step,
             });
         });
     frame.render_widget(canvas, glass_canvas_area);
@@ -2177,5 +2227,16 @@ mod dim_tests {
             cache.edges.iter().all(|e| e.color != Color::DarkGray),
             "all edges are within the lit neighborhood"
         );
+    }
+}
+
+#[cfg(test)]
+mod fill_tests {
+    use super::fill_step_for;
+
+    #[test]
+    fn fill_step_is_quarter_of_smaller_cell_dimension() {
+        assert_eq!(fill_step_for(2.0, 4.0), 0.5);
+        assert_eq!(fill_step_for(4.0, 2.0), 0.5);
     }
 }
