@@ -298,78 +298,68 @@ fn draw_outlined_shape(
 impl Shape for GraphNodesShape<'_> {
     fn draw(&self, painter: &mut Painter) {
         for node in self.nodes {
-            // Draw hover highlight ring (if hovered and not selected)
+            if node.filled {
+                paint_shape(
+                    painter,
+                    node.x,
+                    node.y,
+                    node.radius,
+                    node.shape,
+                    self.fill_step,
+                    |_, _| node.color,
+                );
+            } else {
+                draw_outlined_shape(painter, node.x, node.y, node.radius, node.shape, node.color);
+            }
+
+            let mut current_radius = node.radius;
+
+            if node.filled {
+                for &color in &node.extra_tag_colors {
+                    current_radius += 1.0;
+                    let halo_color = if node.dimmed { Color::DarkGray } else { color };
+                    draw_outlined_shape(
+                        painter,
+                        node.x,
+                        node.y,
+                        current_radius,
+                        node.shape,
+                        halo_color,
+                    );
+                }
+            }
+
             if node.is_hovered && !node.is_selected {
-                let hover_radius = node.radius + 1.0;
+                current_radius += 1.0;
                 draw_outlined_shape(
                     painter,
                     node.x,
                     node.y,
-                    hover_radius,
+                    current_radius,
                     node.shape,
                     Color::White,
                 );
             }
 
-            if node.filled {
-                let wedge_colors = (!node.extra_tag_colors.is_empty()).then(|| {
-                    // Pie wedges inside the node: first tag at 12 o'clock,
-                    // clockwise in tag order; flat gray while dimmed.
-                    let k = node.extra_tag_colors.len() as f64;
-                    move |dx: f64, dy: f64| -> Color {
-                        if node.dimmed {
-                            return Color::DarkGray;
-                        }
-                        let a =
-                            (dy.atan2(dx) + std::f64::consts::FRAC_PI_2 + std::f64::consts::TAU)
-                                % std::f64::consts::TAU;
-                        node.extra_tag_colors
-                            [((a / std::f64::consts::TAU) * k).floor().min(k - 1.0) as usize]
-                    }
-                });
-                match wedge_colors {
-                    Some(color_for) => paint_shape(
-                        painter,
-                        node.x,
-                        node.y,
-                        node.radius,
-                        node.shape,
-                        self.fill_step,
-                        color_for,
-                    ),
-                    None => paint_shape(
-                        painter,
-                        node.x,
-                        node.y,
-                        node.radius,
-                        node.shape,
-                        self.fill_step,
-                        |_, _| node.color,
-                    ),
-                }
-            } else {
-                draw_outlined_shape(painter, node.x, node.y, node.radius, node.shape, node.color);
-            }
-
             if node.grow_ring {
-                // Detached ring in the node's own color; the gap is the cut.
+                current_radius += 1.0;
                 draw_outlined_shape(
                     painter,
                     node.x,
                     node.y,
-                    node.radius + 1.0,
+                    current_radius,
                     node.shape,
                     node.color,
                 );
             }
 
             if node.is_selected {
-                let ring_radius = node.radius + 1.5;
+                current_radius += 1.5;
                 draw_outlined_shape(
                     painter,
                     node.x,
                     node.y,
-                    ring_radius,
+                    current_radius,
                     node.shape,
                     node.selection_ring_color,
                 );
