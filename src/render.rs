@@ -298,20 +298,6 @@ fn draw_outlined_shape(
 impl Shape for GraphNodesShape<'_> {
     fn draw(&self, painter: &mut Painter) {
         for node in self.nodes {
-            if node.filled {
-                paint_shape(
-                    painter,
-                    node.x,
-                    node.y,
-                    node.radius,
-                    node.shape,
-                    self.fill_step,
-                    |_, _| node.color,
-                );
-            } else {
-                draw_outlined_shape(painter, node.x, node.y, node.radius, node.shape, node.color);
-            }
-
             let mut current_radius = node.radius;
 
             if node.filled {
@@ -327,6 +313,20 @@ impl Shape for GraphNodesShape<'_> {
                         halo_color,
                     );
                 }
+            }
+
+            if node.filled {
+                paint_shape(
+                    painter,
+                    node.x,
+                    node.y,
+                    node.radius,
+                    node.shape,
+                    self.fill_step,
+                    |_, _| node.color,
+                );
+            } else {
+                draw_outlined_shape(painter, node.x, node.y, node.radius, node.shape, node.color);
             }
 
             if node.is_hovered && !node.is_selected {
@@ -1471,12 +1471,19 @@ pub fn draw_looking_glass(
             .collect()
     };
 
+    let filled = match settings.visual.node_fill {
+        NodeFill::None => false,
+        NodeFill::Filled => true,
+        NodeFill::Dynamic => !matches!(settings.visual.node_scale, NodeScale::Fixed(1)),
+    };
+    let halo_offset = if filled {
+        extra_tag_colors.len() as f64
+    } else {
+        0.0
+    };
+
     let node_render = NodeRenderData {
-        filled: match settings.visual.node_fill {
-            NodeFill::None => false,
-            NodeFill::Filled => true,
-            NodeFill::Dynamic => !matches!(settings.visual.node_scale, NodeScale::Fixed(1)),
-        },
+        filled,
         dimmed: false,
         x: 0.0,
         y: 0.0,
@@ -1493,7 +1500,7 @@ pub fn draw_looking_glass(
     // Bounds fit the node + tag orbit + selection ring, with the same
     // terminal-aspect correction the main canvas uses.
     let aspect = glass_canvas_area.width as f64 / glass_canvas_area.height as f64;
-    let half_h = radius + 4.0;
+    let half_h = radius + halo_offset + 4.0;
     let half_w = half_h * crate::viewport::CELL_ASPECT * aspect;
     let glass_cell_w = (2.0 * half_w) / (glass_canvas_area.width as f64).max(1.0);
     let glass_cell_h = (2.0 * half_h) / (glass_canvas_area.height as f64).max(1.0);
