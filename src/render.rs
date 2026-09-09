@@ -669,7 +669,6 @@ impl RenderCache {
             && matches!(focus, SelectionFocus::Grow | SelectionFocus::GrowDim);
         let floor_rows = node_floor_rows(settings.visual.node_scale, graph.node_count());
         let floor = floor_rows * world_per_row;
-        let large_floor = node_floor_rows(NodeScale::Large, 0) * world_per_row;
 
         for &idx in &self.visible_nodes {
             let node = &graph[idx];
@@ -686,7 +685,7 @@ impl RenderCache {
             let grown = grow && lit.contains(&idx);
             // Grown nodes are 1.5x whatever they would otherwise be drawn at.
             let radius = if grown {
-                base_radius.max(floor).max(large_floor) * 1.5
+                base_radius.max(floor) * 1.5
             } else {
                 base_radius.max(floor)
             };
