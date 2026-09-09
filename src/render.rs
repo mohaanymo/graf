@@ -1514,6 +1514,8 @@ pub fn draw_looking_glass(
         .marker(ratatui::symbols::Marker::from(
             settings.visual.canvas_marker,
         ))
+        .x_bounds([-half_w, half_w])
+        .y_bounds([-half_h, half_h])
         .paint(|ctx| {
             ctx.draw(&GraphNodesShape {
                 nodes: std::slice::from_ref(&node_render),
