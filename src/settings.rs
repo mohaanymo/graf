@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::Error as DeError};
 use std::str::FromStr;
 
 // ── Enums ───────────────────────────────────────────────────────────────────
@@ -124,16 +124,59 @@ pub enum NodeSizeMode {
     LinkCount,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum NodeScale {
-    /// `Large` on small vaults, shrinking towards `Small` as the note count grows.
     #[default]
     Automatic,
-    /// Outlined nodes at their raw world radius (the classic look).
-    Small,
-    /// Filled nodes that never drop below roughly one text row.
-    Large,
+    /// Fixed size 1-10; 1 = classic outlined nodes, 10 = roomy filled nodes.
+    Fixed(u8),
+}
+
+impl Serialize for NodeScale {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            NodeScale::Automatic => serializer.serialize_str("automatic"),
+            NodeScale::Fixed(n) => serializer.serialize_u8(*n),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for NodeScale {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct NodeScaleVisitor;
+
+        impl serde::de::Visitor<'_> for NodeScaleVisitor {
+            type Value = NodeScale;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str(r#""automatic" or an integer 1-10"#)
+            }
+
+            fn visit_str<E: DeError>(self, v: &str) -> Result<NodeScale, E> {
+                if v.eq_ignore_ascii_case("automatic") {
+                    Ok(NodeScale::Automatic)
+                } else {
+                    Err(E::custom(
+                        r#"node_scale: expected "automatic" or integer 1-10"#,
+                    ))
+                }
+            }
+
+            fn visit_u64<E: DeError>(self, v: u64) -> Result<NodeScale, E> {
+                u8::try_from(v)
+                    .map(NodeScale::Fixed)
+                    .map_err(|_| E::custom(r#"node_scale: expected "automatic" or integer 1-10"#))
+            }
+
+            fn visit_i64<E: DeError>(self, v: i64) -> Result<NodeScale, E> {
+                u8::try_from(v)
+                    .map(NodeScale::Fixed)
+                    .map_err(|_| E::custom(r#"node_scale: expected "automatic" or integer 1-10"#))
+            }
+        }
+
+        deserializer.deserialize_any(NodeScaleVisitor)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]

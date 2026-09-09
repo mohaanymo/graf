@@ -485,7 +485,7 @@ All enums implement `Default`, `FromStr`, `Serialize`, and `Deserialize`:
 | `EdgeColorMode` | `Source` (default), `Target`, `Uniform` |
 | `LabelMode` | `Selected` (default), `Neighbors`, `All`, `None` |
 | `NodeSizeMode` | `Fixed` (default), `LinkCount` |
-| `NodeScale` | `Automatic` (default), `Small`, `Large` |
+| `NodeScale` | `Automatic` (default), `Fixed(u8)` — `"automatic"` or integer 1-10 |
 | `SelectionFocus` | `Grow` (default), `None`, `Dim`, `GrowDim` |
 | `CanvasMarker` | `Braille` (default), `HalfBlock`, `Dot` |
 | `NodeShape` | `Circle` (default), `Square`, `Diamond` |

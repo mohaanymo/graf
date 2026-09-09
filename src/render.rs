@@ -147,13 +147,12 @@ struct GraphNodesShape<'a> {
 }
 
 /// Minimum node radius in text rows for a vault of `node_count` notes.
-/// `Automatic` behaves like `Large` up to about 100 notes and fades to
-/// `Small` by about 400, so big vaults keep the compact classic look.
+/// `Automatic` behaves like the maximum size up to about 100 notes and fades
+/// to the classic small look by about 400, so big vaults stay compact.
 pub(crate) fn node_floor_rows(scale: NodeScale, node_count: usize) -> f64 {
     const LARGE_ROWS: f64 = 0.9;
     match scale {
-        NodeScale::Small => 0.0,
-        NodeScale::Large => LARGE_ROWS,
+        NodeScale::Fixed(k) => LARGE_ROWS * (k.min(10).saturating_sub(1)) as f64 / 9.0,
         NodeScale::Automatic => {
             let t = ((400.0 - node_count as f64) / 300.0).clamp(0.0, 1.0);
             LARGE_ROWS * t
@@ -1514,7 +1513,7 @@ pub fn draw_looking_glass(
     };
 
     let node_render = NodeRenderData {
-        filled: settings.visual.node_scale != NodeScale::Small,
+        filled: !matches!(settings.visual.node_scale, NodeScale::Fixed(1)),
         dimmed: false,
         x: 0.0,
         y: 0.0,
@@ -2002,14 +2001,21 @@ mod node_scale_tests {
 
     #[test]
     fn automatic_fades_from_large_to_small_with_vault_size() {
-        assert_eq!(node_floor_rows(NodeScale::Small, 10), 0.0);
-        assert!(node_floor_rows(NodeScale::Large, 5_000) > 0.0);
+        assert_eq!(node_floor_rows(NodeScale::Fixed(1), 10), 0.0);
+        assert!((node_floor_rows(NodeScale::Fixed(10), 5_000) - 0.9).abs() < 1e-9);
         let small_vault = node_floor_rows(NodeScale::Automatic, 20);
         let mid_vault = node_floor_rows(NodeScale::Automatic, 250);
         let big_vault = node_floor_rows(NodeScale::Automatic, 1_000);
-        assert_eq!(small_vault, node_floor_rows(NodeScale::Large, 20));
+        assert!((small_vault - node_floor_rows(NodeScale::Fixed(10), 20)).abs() < 1e-9);
         assert!(mid_vault > 0.0 && mid_vault < small_vault);
         assert_eq!(big_vault, 0.0);
+    }
+
+    #[test]
+    fn fixed_scale_spans_small_to_large_linearly() {
+        assert_eq!(node_floor_rows(NodeScale::Fixed(1), 10), 0.0);
+        assert!((node_floor_rows(NodeScale::Fixed(10), 5_000) - 0.9).abs() < 1e-9);
+        assert!((node_floor_rows(NodeScale::Fixed(5), 100) - 0.9 * 4.0 / 9.0).abs() < 1e-9);
     }
 }
 
