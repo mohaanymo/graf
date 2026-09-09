@@ -298,11 +298,12 @@ fn draw_outlined_shape(
 impl Shape for GraphNodesShape<'_> {
     fn draw(&self, painter: &mut Painter) {
         for node in self.nodes {
+            let ring_spacing = 1.0_f64.max(node.radius * 0.15);
             let mut current_radius = node.radius;
 
             if node.filled {
                 for &color in &node.extra_tag_colors {
-                    current_radius += 1.0;
+                    current_radius += ring_spacing;
                     let halo_color = if node.dimmed { Color::DarkGray } else { color };
                     draw_outlined_shape(
                         painter,
@@ -330,7 +331,7 @@ impl Shape for GraphNodesShape<'_> {
             }
 
             if node.is_hovered && !node.is_selected {
-                current_radius += 1.0;
+                current_radius += ring_spacing;
                 draw_outlined_shape(
                     painter,
                     node.x,
@@ -342,7 +343,7 @@ impl Shape for GraphNodesShape<'_> {
             }
 
             if node.grow_ring {
-                current_radius += 1.0;
+                current_radius += ring_spacing;
                 draw_outlined_shape(
                     painter,
                     node.x,
@@ -354,7 +355,7 @@ impl Shape for GraphNodesShape<'_> {
             }
 
             if node.is_selected {
-                current_radius += 1.5;
+                current_radius += ring_spacing * 1.5;
                 draw_outlined_shape(
                     painter,
                     node.x,
@@ -1451,9 +1452,8 @@ pub fn draw_looking_glass(
     // tags) occupies whatever remains below it.
     let visual_inner_h = base_h.saturating_sub(2).min(inner.height);
     let glass_canvas_area = Rect::new(inner.x, inner.y, inner.width, visual_inner_h);
-
-    // Radius matches the simulation's node-size computation exactly.
-    let radius = node_world_radius(settings, cache.max_link_count, node.data.link_count);
+    let base_radius = node_world_radius(settings, cache.max_link_count, node.data.link_count);
+    let radius = base_radius * 1.2;
     let node_color = cache
         .node_own_color
         .get(&idx)
@@ -1476,8 +1476,9 @@ pub fn draw_looking_glass(
         NodeFill::Filled => true,
         NodeFill::Dynamic => !matches!(settings.visual.node_scale, NodeScale::Fixed(1)),
     };
+    let ring_spacing = 1.0_f64.max(radius * 0.15);
     let halo_offset = if filled {
-        extra_tag_colors.len() as f64
+        extra_tag_colors.len() as f64 * ring_spacing
     } else {
         0.0
     };
@@ -1496,11 +1497,10 @@ pub fn draw_looking_glass(
         selection_ring_color: colors.selected_indicator_color,
         shape: settings.visual.node_shape,
     };
-
+    let half_h = radius + halo_offset + (4.0 * ring_spacing);
     // Bounds fit the node + tag orbit + selection ring, with the same
     // terminal-aspect correction the main canvas uses.
     let aspect = glass_canvas_area.width as f64 / glass_canvas_area.height as f64;
-    let half_h = radius + halo_offset + 4.0;
     let half_w = half_h * crate::viewport::CELL_ASPECT * aspect;
     let glass_cell_w = (2.0 * half_w) / (glass_canvas_area.width as f64).max(1.0);
     let glass_cell_h = (2.0 * half_h) / (glass_canvas_area.height as f64).max(1.0);
