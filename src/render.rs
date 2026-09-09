@@ -176,25 +176,22 @@ fn paint_shape(
     radius: f64,
     shape: NodeShape,
     step: f64,
-    color_for: impl Fn(f64, f64, bool) -> Option<Color>,
+    color_for: impl Fn(f64, f64) -> Color,
 ) {
     let step = step.max(1e-6);
-    let border = (step * 2.5).min(radius);
-    let is_inside = |r: f64, dx: f64, dy: f64| match shape {
-        NodeShape::Circle => dx * dx + dy * dy <= r * r,
-        NodeShape::Square => dx.abs() <= r && dy.abs() <= r,
-        NodeShape::Diamond => dx.abs() + dy.abs() <= r,
+    let inside = |dx: f64, dy: f64| match shape {
+        NodeShape::Circle => dx * dx + dy * dy <= radius * radius,
+        NodeShape::Square => dx.abs() <= radius && dy.abs() <= radius,
+        NodeShape::Diamond => dx.abs() + dy.abs() <= radius,
     };
     let mut dy = -radius;
     while dy <= radius {
         let mut dx = -radius;
         while dx <= radius {
-            if is_inside(radius, dx, dy) {
-                let is_border = (radius - border) <= 0.0 || !is_inside(radius - border, dx, dy);
-                if let Some(color) = color_for(dx, dy, is_border) {
-                    if let Some((px, py)) = painter.get_point(cx + dx, cy + dy) {
-                        painter.paint(px, py, color);
-                    }
+            if inside(dx, dy) {
+                let color = color_for(dx, dy);
+                if let Some((px, py)) = painter.get_point(cx + dx, cy + dy) {
+                    painter.paint(px, py, color);
                 }
             }
             dx += step;
@@ -314,41 +311,45 @@ impl Shape for GraphNodesShape<'_> {
                 );
             }
 
-            let has_tags = !node.extra_tag_colors.is_empty();
-            let k = node.extra_tag_colors.len() as f64;
-
-            let color_for = move |dx: f64, dy: f64, is_border: bool| -> Option<Color> {
-                if node.dimmed {
-                    return if node.filled || is_border {
-                        Some(Color::DarkGray)
-                    } else {
-                        None
-                    };
-                }
-
-                if is_border && has_tags {
-                    let a = (dy.atan2(dx) + std::f64::consts::FRAC_PI_2 + std::f64::consts::TAU)
-                        % std::f64::consts::TAU;
-                    Some(
+            if node.filled {
+                let wedge_colors = (!node.extra_tag_colors.is_empty()).then(|| {
+                    // Pie wedges inside the node: first tag at 12 o'clock,
+                    // clockwise in tag order; flat gray while dimmed.
+                    let k = node.extra_tag_colors.len() as f64;
+                    move |dx: f64, dy: f64| -> Color {
+                        if node.dimmed {
+                            return Color::DarkGray;
+                        }
+                        let a =
+                            (dy.atan2(dx) + std::f64::consts::FRAC_PI_2 + std::f64::consts::TAU)
+                                % std::f64::consts::TAU;
                         node.extra_tag_colors
-                            [((a / std::f64::consts::TAU) * k).floor().min(k - 1.0) as usize],
-                    )
-                } else if node.filled || is_border {
-                    Some(node.color)
-                } else {
-                    None
+                            [((a / std::f64::consts::TAU) * k).floor().min(k - 1.0) as usize]
+                    }
+                });
+                match wedge_colors {
+                    Some(color_for) => paint_shape(
+                        painter,
+                        node.x,
+                        node.y,
+                        node.radius,
+                        node.shape,
+                        self.fill_step,
+                        color_for,
+                    ),
+                    None => paint_shape(
+                        painter,
+                        node.x,
+                        node.y,
+                        node.radius,
+                        node.shape,
+                        self.fill_step,
+                        |_, _| node.color,
+                    ),
                 }
-            };
-
-            paint_shape(
-                painter,
-                node.x,
-                node.y,
-                node.radius,
-                node.shape,
-                self.fill_step,
-                color_for,
-            );
+            } else {
+                draw_outlined_shape(painter, node.x, node.y, node.radius, node.shape, node.color);
+            }
 
             if node.grow_ring {
                 // Detached ring in the node's own color; the gap is the cut.
