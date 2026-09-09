@@ -13,6 +13,12 @@ label_mode = "selected"
 label_max_length = 20
 node_size = 2.0
 node_size_mode = "fixed"
+# "automatic": filled, roomy nodes on small vaults, shrinking to the classic look
+# as the note count grows; "small": classic outlined nodes; "large": always roomy.
+node_scale = "automatic"
+# What selecting a node does to the rest: "grow" (selection and neighbors enlarge),
+# "dim" (everything else turns gray), "grow_dim" (both), "none".
+selection_focus = "grow"
 edge_thickness = 1
 show_legend = true
 show_grid = false

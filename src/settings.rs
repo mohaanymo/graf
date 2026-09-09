@@ -126,6 +126,32 @@ pub enum NodeSizeMode {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+pub enum NodeScale {
+    /// `Large` on small vaults, shrinking towards `Small` as the note count grows.
+    #[default]
+    Automatic,
+    /// Outlined nodes at their raw world radius (the classic look).
+    Small,
+    /// Filled nodes that never drop below roughly one text row.
+    Large,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SelectionFocus {
+    /// Selection changes nothing but the ring.
+    None,
+    /// The selected node and its neighbors grow.
+    #[default]
+    Grow,
+    /// Everything outside the selection's neighborhood turns gray.
+    Dim,
+    /// Both of the above.
+    GrowDim,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
 pub enum CanvasMarker {
     #[default]
     Braille,
@@ -271,6 +297,10 @@ pub struct VisualConfig {
     pub node_size: f64,
     #[serde(default)]
     pub node_size_mode: NodeSizeMode,
+    #[serde(default)]
+    pub node_scale: NodeScale,
+    #[serde(default)]
+    pub selection_focus: SelectionFocus,
     pub edge_thickness: u16,
     pub show_legend: bool,
     #[serde(default)]
@@ -306,6 +336,8 @@ impl Default for VisualConfig {
             label_max_length: 20,
             node_size: 2.0,
             node_size_mode: NodeSizeMode::default(),
+            node_scale: NodeScale::default(),
+            selection_focus: SelectionFocus::default(),
             edge_thickness: 1,
             show_legend: true,
             show_minimap: false,

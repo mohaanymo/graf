@@ -9,7 +9,8 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 
 use crate::graph::{ContextMenu, GraphState};
 use crate::settings::{
-    EdgeColorMode, LabelMode, LegendPosition, NodeColorMode, NodeShape, Settings,
+    EdgeColorMode, LabelMode, LegendPosition, NodeColorMode, NodeScale, NodeShape, SelectionFocus,
+    Settings,
 };
 use crate::theme::ThemeColors;
 use crate::viewport::{Viewport, node_world_radius};
@@ -132,10 +133,27 @@ pub struct NodeRenderData {
     pub is_hovered: bool,
     pub selection_ring_color: Color,
     pub shape: NodeShape,
+    /// Paint circles as solid discs instead of outlines.
+    pub filled: bool,
 }
 
 struct GraphNodesShape<'a> {
     nodes: &'a [NodeRenderData],
+}
+
+/// Minimum node radius in text rows for a vault of `node_count` notes.
+/// `Automatic` behaves like `Large` up to about 100 notes and fades to
+/// `Small` by about 400, so big vaults keep the compact classic look.
+pub(crate) fn node_floor_rows(scale: NodeScale, node_count: usize) -> f64 {
+    const LARGE_ROWS: f64 = 0.9;
+    match scale {
+        NodeScale::Small => 0.0,
+        NodeScale::Large => LARGE_ROWS,
+        NodeScale::Automatic => {
+            let t = ((400.0 - node_count as f64) / 300.0).clamp(0.0, 1.0);
+            LARGE_ROWS * t
+        }
+    }
 }
 
 /// Solid disc: paints every canvas point inside `radius`, so nodes read as
@@ -335,7 +353,7 @@ impl Shape for GraphNodesShape<'_> {
                 );
             }
 
-            if node.shape == NodeShape::Circle {
+            if node.filled && node.shape == NodeShape::Circle {
                 draw_filled_circle(painter, node.x, node.y, node.radius, node.color);
             } else {
                 draw_outlined_shape(painter, node.x, node.y, node.radius, node.shape, node.color);
@@ -599,6 +617,7 @@ impl RenderCache {
         hovered_node: Option<NodeIndex>,
         x_bounds: [f64; 2],
         y_bounds: [f64; 2],
+        world_per_row: f64,
     ) -> LodTier {
         self.nodes.clear();
         self.visible_nodes.clear();
@@ -624,21 +643,32 @@ impl RenderCache {
             _ => LodTier::Minimal,
         };
 
-        self.dimmed.clear();
+        // Selection neighborhood: grows and/or keeps its color per `selection_focus`.
+        let focus = settings.visual.selection_focus;
+        let mut neighborhood: HashSet<NodeIndex> = HashSet::new();
         if let Some(sel) = selected_node {
-            let mut keep: HashSet<NodeIndex> = selected_nodes.clone();
-            keep.insert(sel);
+            neighborhood.extend(selected_nodes.iter().copied());
+            neighborhood.insert(sel);
             for edge in graph.edges(sel) {
-                keep.insert(edge.source());
-                keep.insert(edge.target());
+                neighborhood.insert(edge.source());
+                neighborhood.insert(edge.target());
             }
+        }
+        self.dimmed.clear();
+        if selected_node.is_some() && matches!(focus, SelectionFocus::Dim | SelectionFocus::GrowDim)
+        {
             self.dimmed.extend(
                 self.visible_nodes
                     .iter()
                     .copied()
-                    .filter(|i| !keep.contains(i)),
+                    .filter(|i| !neighborhood.contains(i)),
             );
         }
+        let grow = selected_node.is_some()
+            && matches!(focus, SelectionFocus::Grow | SelectionFocus::GrowDim);
+        let floor_rows = node_floor_rows(settings.visual.node_scale, graph.node_count());
+        let floor = floor_rows * world_per_row;
+        let large_floor = node_floor_rows(NodeScale::Large, 0) * world_per_row;
 
         for &idx in &self.visible_nodes {
             let node = &graph[idx];
@@ -650,7 +680,17 @@ impl RenderCache {
                     .copied()
                     .unwrap_or(Color::Gray)
             };
-            let radius = node_world_radius(settings, self.max_link_count, node.data.link_count);
+            let base_radius =
+                node_world_radius(settings, self.max_link_count, node.data.link_count);
+            let grown = grow && neighborhood.contains(&idx);
+            // Grown nodes are 1.5x whatever they would otherwise be drawn at.
+            let radius = if grown {
+                base_radius.max(floor).max(large_floor) * 1.5
+            } else {
+                base_radius.max(floor)
+            };
+            // Filled discs only at full detail; outlines stay cheap on big vaults.
+            let filled = tier == LodTier::Full && (grown || floor_rows > 0.0);
 
             let is_selected = selected_node == Some(idx) || selected_nodes.contains(&idx);
             let is_hovered = hovered_node == Some(idx) && !is_selected;
@@ -677,6 +717,7 @@ impl RenderCache {
                         is_hovered,
                         selection_ring_color,
                         shape: settings.visual.node_shape,
+                        filled,
                     });
                 }
                 LodTier::Medium => {
@@ -691,6 +732,7 @@ impl RenderCache {
                         is_hovered: false,
                         selection_ring_color,
                         shape: settings.visual.node_shape,
+                        filled: false,
                     });
                 }
                 LodTier::Minimal => {
@@ -705,6 +747,7 @@ impl RenderCache {
                         is_hovered: false,
                         selection_ring_color,
                         shape: NodeShape::Circle,
+                        filled: false,
                     });
                 }
             }
@@ -838,6 +881,8 @@ pub fn draw_graph_view(
         }
         s
     };
+    let cell_world_height =
+        (y_bounds[1] - y_bounds[0]).abs() / (canvas_area.height as f64).max(1.0);
     let tier = cache.fill_nodes(
         graph,
         settings,
@@ -847,16 +892,15 @@ pub fn draw_graph_view(
         hovered_node,
         x_bounds,
         y_bounds,
+        cell_world_height,
     );
-    cache.fill_edges(
-        graph,
-        settings,
-        colors.edge_color,
-        tier,
-        state.selection.primary,
-    );
-    let cell_world_height =
-        (y_bounds[1] - y_bounds[0]).abs() / (canvas_area.height as f64).max(1.0);
+    let dim_selection = state.selection.primary.filter(|_| {
+        matches!(
+            settings.visual.selection_focus,
+            SelectionFocus::Dim | SelectionFocus::GrowDim
+        )
+    });
+    cache.fill_edges(graph, settings, colors.edge_color, tier, dim_selection);
     cache.fill_labels(
         graph,
         settings,
@@ -893,13 +937,13 @@ pub fn draw_graph_view(
         let width = text.chars().count() as i64;
         let half_width = width as f64 / 2.0 / cols_per_world_x.max(1e-9);
         let x = label.x - half_width;
-        let col0 = ((x - x_bounds[0]) * cols_per_world_x).round() as i64;
+        let col0 = ((x - x_bounds[0]) * cols_per_world_x).floor() as i64;
         let below_y = 2.0 * label.node_y - label.y;
         let slot = [label.y, below_y].into_iter().find_map(|y| {
-            let row = ((y_bounds[1] - y) * rows_per_world_abs).round() as i64;
+            let row = ((y_bounds[1] - y) * rows_per_world_abs).floor() as i64;
             let free = occupied
                 .iter()
-                .all(|&(r, c0, c1)| r != row || col0 > c1 + 1 || col0 + width < c0 - 1);
+                .all(|&(r, c0, c1)| r != row || col0 > c1 || col0 + width < c0);
             free.then_some((row, y))
         });
         let Some((row, y)) = slot else {
@@ -1428,6 +1472,7 @@ pub fn draw_looking_glass(
     };
 
     let node_render = NodeRenderData {
+        filled: settings.visual.node_scale != NodeScale::Small,
         x: 0.0,
         y: 0.0,
         color: node_color,
@@ -1803,6 +1848,7 @@ mod tests {
             None,
             TEST_X_BOUNDS,
             TEST_Y_BOUNDS,
+            0.0,
         );
         cache.fill_labels(&graph, &settings, Some(idx1), &selected_nodes, 0.0, _tier);
         assert!(cache.labels.is_empty());
@@ -1818,6 +1864,7 @@ mod tests {
             None,
             TEST_X_BOUNDS,
             TEST_Y_BOUNDS,
+            0.0,
         );
         cache.fill_labels(&graph, &settings, Some(idx1), &selected_nodes, 0.0, _tier);
         assert_eq!(cache.labels.len(), 3);
@@ -1833,6 +1880,7 @@ mod tests {
             None,
             TEST_X_BOUNDS,
             TEST_Y_BOUNDS,
+            0.0,
         );
         cache.fill_labels(&graph, &settings, Some(idx1), &selected_nodes, 0.0, _tier);
         assert_eq!(cache.labels.len(), 1);
@@ -1852,6 +1900,7 @@ mod tests {
             None,
             TEST_X_BOUNDS,
             TEST_Y_BOUNDS,
+            0.0,
         );
         cache.fill_labels(&graph, &settings, Some(idx1), &selected_nodes, 0.0, _tier);
         // Node 1 (selected) and Node 2 (neighbor) should have labels. Node 3 (distant) should not.
@@ -1874,6 +1923,7 @@ mod tests {
             None,
             TEST_X_BOUNDS,
             TEST_Y_BOUNDS,
+            0.0,
         );
         settings.visual.label_mode = LabelMode::Selected;
         cache.fill_labels(&graph, &settings, Some(idx1), &selected_nodes, 10.0, _tier);
@@ -1892,5 +1942,23 @@ mod tests {
         let label = &cache.labels[0];
         // The default label_offset is 4.0, which is larger than min_offset_y of 1.0. The actual offset should be 4.0.
         assert_eq!(label.y, node_y + radius + 4.0);
+    }
+}
+
+#[cfg(test)]
+mod node_scale_tests {
+    use super::node_floor_rows;
+    use crate::settings::NodeScale;
+
+    #[test]
+    fn automatic_fades_from_large_to_small_with_vault_size() {
+        assert_eq!(node_floor_rows(NodeScale::Small, 10), 0.0);
+        assert!(node_floor_rows(NodeScale::Large, 5_000) > 0.0);
+        let small_vault = node_floor_rows(NodeScale::Automatic, 20);
+        let mid_vault = node_floor_rows(NodeScale::Automatic, 250);
+        let big_vault = node_floor_rows(NodeScale::Automatic, 1_000);
+        assert_eq!(small_vault, node_floor_rows(NodeScale::Large, 20));
+        assert!(mid_vault > 0.0 && mid_vault < small_vault);
+        assert_eq!(big_vault, 0.0);
     }
 }
