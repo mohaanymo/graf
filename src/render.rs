@@ -135,6 +135,8 @@ pub struct NodeRenderData {
     pub shape: NodeShape,
     /// Paint circles as solid discs instead of outlines.
     pub filled: bool,
+    /// Dimmed to gray by selection focus dimming.
+    pub dimmed: bool,
 }
 
 struct GraphNodesShape<'a> {
@@ -367,7 +369,8 @@ impl Shape for GraphNodesShape<'_> {
                     - std::f64::consts::FRAC_PI_2;
                 let cx = node.x + orbit_radius * angle.cos();
                 let cy = node.y + orbit_radius * angle.sin();
-                draw_tag_marker(painter, cx, cy, indicator_radius, i, color);
+                let marker_color = if node.dimmed { Color::DarkGray } else { color };
+                draw_tag_marker(painter, cx, cy, indicator_radius, i, marker_color);
             }
 
             if node.is_selected {
@@ -559,7 +562,7 @@ impl RenderCache {
         settings: &Settings,
         edge_color: Color,
         tier: LodTier,
-        selected_node: Option<NodeIndex>,
+        lit: &HashSet<NodeIndex>,
     ) {
         self.edges.clear();
 
@@ -572,9 +575,14 @@ impl RenderCache {
         for edge in graph.edge_references() {
             let src = &graph[edge.source()];
             let tgt = &graph[edge.target()];
-            let touches_selection =
-                selected_node.is_some_and(|sel| edge.source() == sel || edge.target() == sel);
-            let color = if selected_node.is_some() && !touches_selection {
+            let dimming = matches!(
+                settings.visual.selection_focus,
+                SelectionFocus::Dim | SelectionFocus::GrowDim
+            );
+            let color = if dimming
+                && !lit.is_empty()
+                && !(lit.contains(&edge.source()) && lit.contains(&edge.target()))
+            {
                 Color::DarkGray
             } else if uniform_edges {
                 edge_color
@@ -613,6 +621,7 @@ impl RenderCache {
         settings: &Settings,
         selected_node: Option<NodeIndex>,
         selected_nodes: &HashSet<NodeIndex>,
+        lit: &HashSet<NodeIndex>,
         selection_ring_color: Color,
         hovered_node: Option<NodeIndex>,
         x_bounds: [f64; 2],
@@ -643,17 +652,9 @@ impl RenderCache {
             _ => LodTier::Minimal,
         };
 
-        // Selection neighborhood: grows and/or keeps its color per `selection_focus`.
         let focus = settings.visual.selection_focus;
-        let mut neighborhood: HashSet<NodeIndex> = HashSet::new();
-        if let Some(sel) = selected_node {
-            neighborhood.extend(selected_nodes.iter().copied());
-            neighborhood.insert(sel);
-            for edge in graph.edges(sel) {
-                neighborhood.insert(edge.source());
-                neighborhood.insert(edge.target());
-            }
-        }
+        // `lit`: the selection plus its one-hop neighborhood, passed in by the
+        // caller; grow keeps these nodes large, dimming grays everything else.
         self.dimmed.clear();
         if selected_node.is_some() && matches!(focus, SelectionFocus::Dim | SelectionFocus::GrowDim)
         {
@@ -661,7 +662,7 @@ impl RenderCache {
                 self.visible_nodes
                     .iter()
                     .copied()
-                    .filter(|i| !neighborhood.contains(i)),
+                    .filter(|i| !lit.contains(i)),
             );
         }
         let grow = selected_node.is_some()
@@ -682,7 +683,7 @@ impl RenderCache {
             };
             let base_radius =
                 node_world_radius(settings, self.max_link_count, node.data.link_count);
-            let grown = grow && neighborhood.contains(&idx);
+            let grown = grow && lit.contains(&idx);
             // Grown nodes are 1.5x whatever they would otherwise be drawn at.
             let radius = if grown {
                 base_radius.max(floor).max(large_floor) * 1.5
@@ -718,6 +719,7 @@ impl RenderCache {
                         selection_ring_color,
                         shape: settings.visual.node_shape,
                         filled,
+                        dimmed: self.dimmed.contains(&idx),
                     });
                 }
                 LodTier::Medium => {
@@ -733,6 +735,7 @@ impl RenderCache {
                         selection_ring_color,
                         shape: settings.visual.node_shape,
                         filled: false,
+                        dimmed: self.dimmed.contains(&idx),
                     });
                 }
                 LodTier::Minimal => {
@@ -748,6 +751,7 @@ impl RenderCache {
                         selection_ring_color,
                         shape: NodeShape::Circle,
                         filled: false,
+                        dimmed: self.dimmed.contains(&idx),
                     });
                 }
             }
@@ -883,24 +887,29 @@ pub fn draw_graph_view(
     };
     let cell_world_height =
         (y_bounds[1] - y_bounds[0]).abs() / (canvas_area.height as f64).max(1.0);
+    let lit: HashSet<NodeIndex> = {
+        let mut lit = selected_set.clone();
+        if let Some(sel) = state.selection.primary {
+            for edge in graph.edges(sel) {
+                lit.insert(edge.source());
+                lit.insert(edge.target());
+            }
+        }
+        lit
+    };
     let tier = cache.fill_nodes(
         graph,
         settings,
         state.selection.primary,
         &selected_set,
+        &lit,
         colors.selected_indicator_color,
         hovered_node,
         x_bounds,
         y_bounds,
         cell_world_height,
     );
-    let dim_selection = state.selection.primary.filter(|_| {
-        matches!(
-            settings.visual.selection_focus,
-            SelectionFocus::Dim | SelectionFocus::GrowDim
-        )
-    });
-    cache.fill_edges(graph, settings, colors.edge_color, tier, dim_selection);
+    cache.fill_edges(graph, settings, colors.edge_color, tier, &lit);
     cache.fill_labels(
         graph,
         settings,
@@ -1473,6 +1482,7 @@ pub fn draw_looking_glass(
 
     let node_render = NodeRenderData {
         filled: settings.visual.node_scale != NodeScale::Small,
+        dimmed: false,
         x: 0.0,
         y: 0.0,
         color: node_color,
@@ -1844,6 +1854,7 @@ mod tests {
             &settings,
             Some(idx1),
             &selected_nodes,
+            &selected_nodes,
             ratatui::style::Color::Red,
             None,
             TEST_X_BOUNDS,
@@ -1860,6 +1871,7 @@ mod tests {
             &settings,
             Some(idx1),
             &selected_nodes,
+            &selected_nodes,
             ratatui::style::Color::Red,
             None,
             TEST_X_BOUNDS,
@@ -1875,6 +1887,7 @@ mod tests {
             &graph,
             &settings,
             Some(idx1),
+            &selected_nodes,
             &selected_nodes,
             ratatui::style::Color::Red,
             None,
@@ -1895,6 +1908,7 @@ mod tests {
             &graph,
             &settings,
             Some(idx1),
+            &selected_nodes,
             &selected_nodes,
             ratatui::style::Color::Red,
             None,
@@ -1918,6 +1932,7 @@ mod tests {
             &graph,
             &settings,
             Some(idx1),
+            &selected_nodes,
             &selected_nodes,
             ratatui::style::Color::Red,
             None,
@@ -1960,5 +1975,208 @@ mod node_scale_tests {
         assert_eq!(small_vault, node_floor_rows(NodeScale::Large, 20));
         assert!(mid_vault > 0.0 && mid_vault < small_vault);
         assert_eq!(big_vault, 0.0);
+    }
+}
+
+#[cfg(test)]
+mod dim_tests {
+    use super::*;
+    use crate::graph::NodeSpec;
+    use crate::theme::theme_colors;
+
+    fn lit_set(
+        graph: &fdg_sim::ForceGraph<crate::graph::GraphNodeData, ()>,
+        sel: NodeIndex,
+    ) -> HashSet<NodeIndex> {
+        let mut lit = HashSet::new();
+        lit.insert(sel);
+        for edge in graph.edges(sel) {
+            lit.insert(edge.source());
+            lit.insert(edge.target());
+        }
+        lit
+    }
+
+    fn build(
+        specs: &[NodeSpec],
+    ) -> (
+        GraphState,
+        Settings,
+        RenderCache,
+        std::collections::HashMap<String, NodeIndex>,
+    ) {
+        let mut settings = Settings::default();
+        settings.filter.show_orphan = true;
+        settings.visual.selection_focus = SelectionFocus::Dim;
+        let state = GraphState::from_specs(specs, &settings).unwrap();
+        let graph = state.simulation.get_graph();
+        let ids: std::collections::HashMap<String, NodeIndex> = graph
+            .node_indices()
+            .map(|i| (graph[i].data.id.clone(), i))
+            .collect();
+        let mut cache = RenderCache::new();
+        cache.rebuild_topology(
+            graph,
+            &settings,
+            &theme_colors(&settings.visual.theme, settings.visual.background.clone()),
+            false,
+        );
+        (state, settings, cache, ids)
+    }
+
+    #[test]
+    fn dim_grays_everything_outside_selection_neighborhood() {
+        let specs = vec![
+            NodeSpec {
+                id: "a".into(),
+                title: "a".into(),
+                tags: vec![],
+                folder: String::new(),
+                links: vec!["b".into()],
+            },
+            NodeSpec {
+                id: "b".into(),
+                title: "b".into(),
+                tags: vec![],
+                folder: String::new(),
+                links: vec!["a".into(), "c".into()],
+            },
+            NodeSpec {
+                id: "c".into(),
+                title: "c".into(),
+                tags: vec![],
+                folder: String::new(),
+                links: vec!["b".into()],
+            },
+            NodeSpec {
+                id: "x".into(),
+                title: "x".into(),
+                tags: vec![],
+                folder: String::new(),
+                links: vec!["y".into()],
+            },
+            NodeSpec {
+                id: "y".into(),
+                title: "y".into(),
+                tags: vec![],
+                folder: String::new(),
+                links: vec!["x".into()],
+            },
+            NodeSpec {
+                id: "z".into(),
+                title: "z".into(),
+                tags: vec![],
+                folder: String::new(),
+                links: vec![],
+            },
+        ];
+        let (mut state, settings, mut cache, ids) = build(&specs);
+        let b = ids["b"];
+        state.selection.primary = Some(b);
+        let selected_set: HashSet<NodeIndex> = HashSet::from([b]);
+        let lit = lit_set(state.simulation.get_graph(), b);
+
+        let graph = state.simulation.get_graph();
+        let tier = cache.fill_nodes(
+            graph,
+            &settings,
+            Some(b),
+            &selected_set,
+            &lit,
+            Color::White,
+            None,
+            [-1e9, 1e9],
+            [-1e9, 1e9],
+            1.0,
+        );
+        cache.fill_edges(graph, &settings, Color::White, tier, &lit);
+
+        // a, b, c lit; x, y, z dimmed.
+        assert_eq!(
+            cache
+                .nodes
+                .iter()
+                .filter(|n| n.color == Color::DarkGray)
+                .count(),
+            3
+        );
+        assert_eq!(
+            cache
+                .nodes
+                .iter()
+                .filter(|n| n.color != Color::DarkGray)
+                .count(),
+            3
+        );
+        assert!(
+            cache
+                .nodes
+                .iter()
+                .all(|n| n.dimmed == (n.color == Color::DarkGray))
+        );
+        // Only the x-y edge (both endpoints outside lit) dims.
+        assert_eq!(
+            cache
+                .edges
+                .iter()
+                .filter(|e| e.color == Color::DarkGray)
+                .count(),
+            1
+        );
+        assert_eq!(cache.edges.len(), 3);
+    }
+
+    #[test]
+    fn edge_between_two_lit_neighbors_stays_colored() {
+        let specs = vec![
+            NodeSpec {
+                id: "a".into(),
+                title: "a".into(),
+                tags: vec![],
+                folder: String::new(),
+                links: vec!["b".into(), "c".into()],
+            },
+            NodeSpec {
+                id: "b".into(),
+                title: "b".into(),
+                tags: vec![],
+                folder: String::new(),
+                links: vec!["a".into(), "c".into()],
+            },
+            NodeSpec {
+                id: "c".into(),
+                title: "c".into(),
+                tags: vec![],
+                folder: String::new(),
+                links: vec!["b".into(), "a".into()],
+            },
+        ];
+        let (mut state, settings, mut cache, ids) = build(&specs);
+        let b = ids["b"];
+        state.selection.primary = Some(b);
+        let selected_set: HashSet<NodeIndex> = HashSet::from([b]);
+        let lit = lit_set(state.simulation.get_graph(), b);
+
+        let graph = state.simulation.get_graph();
+        let tier = cache.fill_nodes(
+            graph,
+            &settings,
+            Some(b),
+            &selected_set,
+            &lit,
+            Color::White,
+            None,
+            [-1e9, 1e9],
+            [-1e9, 1e9],
+            1.0,
+        );
+        cache.fill_edges(graph, &settings, Color::White, tier, &lit);
+
+        // a-b, b-c touch the selection; a-c has both endpoints lit -> stays colored.
+        assert_eq!(cache.edges.len(), 3);
+        assert!(
+            cache.edges.iter().all(|e| e.color != Color::DarkGray),
+            "all edges are within the lit neighborhood"
+        );
     }
 }
