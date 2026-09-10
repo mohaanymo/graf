@@ -179,6 +179,12 @@ fn paint_shape(
     color_for: impl Fn(f64, f64) -> Color,
 ) {
     let step = step.max(1e-6);
+    if step > radius {
+        if let Some((px, py)) = painter.get_point(cx, cy) {
+            painter.paint(px, py, color_for(0.0, 0.0));
+        }
+        return;
+    }
     let inside = |dx: f64, dy: f64| match shape {
         NodeShape::Circle => dx * dx + dy * dy <= radius * radius,
         NodeShape::Square => dx.abs() <= radius && dy.abs() <= radius,
@@ -673,7 +679,7 @@ impl RenderCache {
             // LOD), or dynamically at full detail with size to show for it.
             let filled = match settings.visual.node_fill {
                 NodeFill::None => false,
-                NodeFill::Filled => tier != LodTier::Minimal,
+                NodeFill::Filled => true,
                 NodeFill::Dynamic => tier == LodTier::Full && (grown || floor_rows > 0.0),
             };
 
@@ -736,7 +742,7 @@ impl RenderCache {
                         is_hovered: false,
                         selection_ring_color,
                         shape: NodeShape::Circle,
-                        filled: false,
+                        filled,
                         dimmed: self.dimmed.contains(&idx),
                         grow_ring: grown,
                     });
@@ -1498,10 +1504,19 @@ pub fn draw_looking_glass(
     };
 
     // Bounds fit the node + tag orbit + selection ring, with the same
-    // terminal-aspect correction the main canvas uses.
+    // terminal-aspect correction the main canvas uses. Ensure both dimensions
+    // fit without clipping.
     let aspect = glass_canvas_area.width as f64 / glass_canvas_area.height as f64;
-    let half_h = radius + halo_offset + 4.0;
-    let half_w = half_h * crate::viewport::CELL_ASPECT * aspect;
+    let required_extent = radius + halo_offset + 2.0;
+    
+    // Compute the minimum half_h needed so both h and w fit required_extent.
+    let mut half_h = required_extent;
+    let mut half_w = half_h * crate::viewport::CELL_ASPECT * aspect;
+    
+    if half_w < required_extent {
+        half_h = required_extent / (crate::viewport::CELL_ASPECT * aspect);
+        half_w = required_extent;
+    }
     let glass_cell_w = (2.0 * half_w) / (glass_canvas_area.width as f64).max(1.0);
     let glass_cell_h = (2.0 * half_h) / (glass_canvas_area.height as f64).max(1.0);
     let glass_fill_step = fill_step_for(glass_cell_w, glass_cell_h);
