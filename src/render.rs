@@ -304,19 +304,29 @@ fn draw_outlined_shape(
 impl Shape for GraphNodesShape<'_> {
     fn draw(&self, painter: &mut Painter) {
         for node in self.nodes {
-            let mut current_radius = node.radius;
+            let mut current_radius = if node.filled && !node.extra_tag_colors.is_empty() {
+                node.radius * 2.25
+            } else {
+                node.radius
+            };
 
-            if node.filled {
-                for &color in &node.extra_tag_colors {
-                    current_radius += 1.0;
-                    let halo_color = if node.dimmed { Color::DarkGray } else { color };
-                    draw_outlined_shape(
+            if node.filled && !node.extra_tag_colors.is_empty() {
+                let n = node.extra_tag_colors.len();
+                for (i, &color) in node.extra_tag_colors.iter().enumerate() {
+                    let sat_color = if node.dimmed { Color::DarkGray } else { color };
+                    let theta = (i as f64) * std::f64::consts::TAU / (n as f64);
+                    let orbit_radius = node.radius * 1.75;
+                    let sx = node.x + orbit_radius * theta.cos();
+                    let sy = node.y + orbit_radius * theta.sin();
+                    
+                    paint_shape(
                         painter,
-                        node.x,
-                        node.y,
-                        current_radius,
+                        sx,
+                        sy,
+                        node.radius * 0.4,
                         node.shape,
-                        halo_color,
+                        self.fill_step,
+                        |_, _| sat_color,
                     );
                 }
             }
@@ -336,7 +346,7 @@ impl Shape for GraphNodesShape<'_> {
             }
 
             if node.is_hovered && !node.is_selected {
-                current_radius += 1.0;
+                current_radius += node.radius * 0.5;
                 draw_outlined_shape(
                     painter,
                     node.x,
@@ -348,7 +358,7 @@ impl Shape for GraphNodesShape<'_> {
             }
 
             if node.grow_ring {
-                current_radius += 1.0;
+                current_radius += node.radius * 0.5;
                 draw_outlined_shape(
                     painter,
                     node.x,
@@ -1482,8 +1492,8 @@ pub fn draw_looking_glass(
         NodeFill::Filled => true,
         NodeFill::Dynamic => !matches!(settings.visual.node_scale, NodeScale::Fixed(1)),
     };
-    let halo_offset = if filled {
-        extra_tag_colors.len() as f64
+    let halo_offset = if filled && !extra_tag_colors.is_empty() {
+        radius * 1.25
     } else {
         0.0
     };
