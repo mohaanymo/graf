@@ -50,10 +50,10 @@ const LOCAL_TAG_PALETTE: &[Color] = &[
     Color::Blue,
     Color::Magenta,
     Color::Cyan,
-    Color::Rgb(255, 165, 0), // Orange
+    Color::Rgb(255, 165, 0),   // Orange
     Color::Rgb(255, 105, 180), // Pink
-    Color::Rgb(50, 205, 50), // Lime
-    Color::Rgb(0, 206, 209), // Turquoise
+    Color::Rgb(50, 205, 50),   // Lime
+    Color::Rgb(0, 206, 209),   // Turquoise
 ];
 
 fn tag_color(tag: &str, index: usize, _total: usize, palette: &[Color]) -> Color {
@@ -345,7 +345,7 @@ impl Shape for GraphNodesShape<'_> {
                     let orbit_radius = node.radius * 1.75;
                     let sx = node.x + orbit_radius * theta.cos();
                     let sy = node.y + orbit_radius * theta.sin();
-                    
+
                     paint_shape(
                         painter,
                         sx,
@@ -717,7 +717,9 @@ impl RenderCache {
                         let mut colors = Vec::new();
                         let mut pal_idx = 0;
                         for _ in &node.data.tags {
-                            while pal_idx < LOCAL_TAG_PALETTE.len() && LOCAL_TAG_PALETTE[pal_idx] == primary_color {
+                            while pal_idx < LOCAL_TAG_PALETTE.len()
+                                && LOCAL_TAG_PALETTE[pal_idx] == primary_color
+                            {
                                 pal_idx += 1;
                             }
                             if pal_idx < LOCAL_TAG_PALETTE.len() {
@@ -1533,11 +1535,11 @@ pub fn draw_looking_glass(
     // fit without clipping.
     let aspect = glass_canvas_area.width as f64 / glass_canvas_area.height as f64;
     let required_extent = radius + halo_offset + 2.0;
-    
+
     // Compute the minimum half_h needed so both h and w fit required_extent.
     let mut half_h = required_extent;
     let mut half_w = half_h * crate::viewport::CELL_ASPECT * aspect;
-    
+
     if half_w < required_extent {
         half_h = required_extent / (crate::viewport::CELL_ASPECT * aspect);
         half_w = required_extent;
