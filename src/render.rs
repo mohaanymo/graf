@@ -43,6 +43,19 @@ fn truncate_ellipsis(s: &str, max: usize) -> String {
     format!("{}…", &s[..end])
 }
 
+const LOCAL_TAG_PALETTE: &[Color] = &[
+    Color::Red,
+    Color::Green,
+    Color::Yellow,
+    Color::Blue,
+    Color::Magenta,
+    Color::Cyan,
+    Color::Rgb(255, 165, 0), // Orange
+    Color::Rgb(255, 105, 180), // Pink
+    Color::Rgb(50, 205, 50), // Lime
+    Color::Rgb(0, 206, 209), // Turquoise
+];
+
 fn tag_color(tag: &str, index: usize, _total: usize, palette: &[Color]) -> Color {
     let palette_len = palette.len();
     if palette_len == 0 {
@@ -310,6 +323,20 @@ impl Shape for GraphNodesShape<'_> {
                 node.radius
             };
 
+            if node.filled {
+                paint_shape(
+                    painter,
+                    node.x,
+                    node.y,
+                    node.radius,
+                    node.shape,
+                    self.fill_step,
+                    |_, _| node.color,
+                );
+            } else {
+                draw_outlined_shape(painter, node.x, node.y, node.radius, node.shape, node.color);
+            }
+
             if node.filled && !node.extra_tag_colors.is_empty() {
                 let n = node.extra_tag_colors.len();
                 for (i, &color) in node.extra_tag_colors.iter().enumerate() {
@@ -329,20 +356,6 @@ impl Shape for GraphNodesShape<'_> {
                         |_, _| sat_color,
                     );
                 }
-            }
-
-            if node.filled {
-                paint_shape(
-                    painter,
-                    node.x,
-                    node.y,
-                    node.radius,
-                    node.shape,
-                    self.fill_step,
-                    |_, _| node.color,
-                );
-            } else {
-                draw_outlined_shape(painter, node.x, node.y, node.radius, node.shape, node.color);
             }
 
             if node.is_hovered && !node.is_selected {
@@ -701,12 +714,20 @@ impl RenderCache {
                     let extra_tag_colors: Vec<Color> = if node.data.tags.is_empty() {
                         Vec::new()
                     } else {
-                        node.data
-                            .tags
-                            .iter()
-                            .skip(1)
-                            .filter_map(|tag| self.tag_colors.get(tag).copied())
-                            .collect()
+                        let mut colors = Vec::new();
+                        let mut pal_idx = 0;
+                        for _ in &node.data.tags {
+                            while pal_idx < LOCAL_TAG_PALETTE.len() && LOCAL_TAG_PALETTE[pal_idx] == primary_color {
+                                pal_idx += 1;
+                            }
+                            if pal_idx < LOCAL_TAG_PALETTE.len() {
+                                colors.push(LOCAL_TAG_PALETTE[pal_idx]);
+                                pal_idx += 1;
+                            } else {
+                                colors.push(Color::White);
+                            }
+                        }
+                        colors
                     };
                     self.nodes.push(NodeRenderData {
                         x: node.location.x as f64,
@@ -1412,22 +1433,31 @@ pub fn draw_looking_glass(
 
     let bg = colors.background_color.unwrap_or(Color::Black);
 
+    let node_color = cache
+        .node_own_color
+        .get(&idx)
+        .copied()
+        .unwrap_or(Color::Gray);
+
     // Tags render below the fixed-size visual; the glass grows downward.
-    let tags: Vec<(String, Color)> = node
-        .data
-        .tags
-        .iter()
-        .map(|t| {
-            (
-                t.clone(),
-                cache
-                    .tag_colors
-                    .get(t)
-                    .copied()
-                    .unwrap_or(colors.label_color),
-            )
-        })
-        .collect();
+    let tags: Vec<(String, Color)> = {
+        let mut colors = Vec::new();
+        let mut pal_idx = 0;
+        for t in &node.data.tags {
+            while pal_idx < LOCAL_TAG_PALETTE.len() && LOCAL_TAG_PALETTE[pal_idx] == node_color {
+                pal_idx += 1;
+            }
+            let c = if pal_idx < LOCAL_TAG_PALETTE.len() {
+                let color = LOCAL_TAG_PALETTE[pal_idx];
+                pal_idx += 1;
+                color
+            } else {
+                Color::White
+            };
+            colors.push((t.clone(), c));
+        }
+        colors
+    };
 
     // Fixed visual height = the configured looking_glass_height (border
     // included). The link-count line + tag list extend the glass downward.
@@ -1470,22 +1500,7 @@ pub fn draw_looking_glass(
 
     // Radius matches the simulation's node-size computation exactly.
     let radius = node_world_radius(settings, cache.max_link_count, node.data.link_count);
-    let node_color = cache
-        .node_own_color
-        .get(&idx)
-        .copied()
-        .unwrap_or(Color::Gray);
-    let extra_tag_colors: Vec<Color> = if node.data.tags.is_empty() {
-        Vec::new()
-    } else {
-        node.data
-            .tags
-            .iter()
-            .skip(1)
-            .filter_map(|t| cache.tag_colors.get(t).copied())
-            .take(8)
-            .collect()
-    };
+    let extra_tag_colors: Vec<Color> = tags.iter().map(|(_, c)| *c).collect();
 
     let filled = match settings.visual.node_fill {
         NodeFill::None => false,
